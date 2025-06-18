@@ -1,6 +1,16 @@
 # Multi-Application Kubernetes Setup
 
-This project demonstrates how to run multiple applications in a single Kubernetes cluster using separate namespaces.
+This project demonstrates how to run multiple applications in a single Kubernetes cluster with path-based routing.
+
+## 🏗️ Architecture Overview
+
+```
+localhost/
+├── /kube-app      → Routes to kube-app (Next.js application)
+└── /kube-app-2    → Routes to kube-app-2 (Next.js application)
+```
+
+Both applications run in the same Kubernetes namespace (`kube-app`) and are accessible through a single ingress controller with path-based routing.
 
 ## Project Structure
 
@@ -19,7 +29,8 @@ kubetest/
 │       └── cleanup.sh     # Individual cleanup script
 ├── k8s-shared/
 │   ├── deploy-all.sh      # Deploy both applications
-│   └── cleanup-all.sh     # Clean up both applications
+│   ├── cleanup-all.sh     # Clean up both applications
+│   └── ingress.yaml       # Shared ingress configuration
 └── README.md
 ```
 
@@ -28,14 +39,14 @@ kubetest/
 ### kube-app
 - **Namespace**: `kube-app`
 - **Service**: `kube-app-service`
+- **Path**: `/kube-app` (with ingress)
 - **Port**: 8080 (when port-forwarding)
-- **Host**: `kube-app.local` (with ingress)
 
 ### kube-app-2
-- **Namespace**: `kube-app-2`
+- **Namespace**: `kube-app` (shared with kube-app)
 - **Service**: `kube-app-2-service`
+- **Path**: `/kube-app-2` (with ingress)
 - **Port**: 8081 (when port-forwarding)
-- **Host**: `kube-app-2.local` (with ingress)
 
 ## Prerequisites
 
@@ -51,14 +62,33 @@ kubetest/
 minikube start --driver=docker
 ```
 
-### 2. Deploy All Applications
+### 2. Enable Ingress Controller
+
+```bash
+minikube addons enable ingress
+```
+
+### 3. Deploy All Applications
 
 ```bash
 # Deploy both applications at once
 ./k8s-shared/deploy-all.sh
 ```
 
-### 3. Access Applications
+### 4. Access Applications
+
+#### Option A: Using Ingress (Recommended)
+
+```bash
+# Start minikube tunnel (keep this running)
+minikube tunnel
+
+# Access applications
+curl http://localhost/kube-app
+curl http://localhost/kube-app-2
+```
+
+#### Option B: Using Port Forwarding
 
 ```bash
 # Access kube-app
@@ -66,15 +96,8 @@ kubectl port-forward service/kube-app-service 8080:80 -n kube-app
 # Visit: http://localhost:8080
 
 # Access kube-app-2 (in another terminal)
-kubectl port-forward service/kube-app-2-service 8081:80 -n kube-app-2
+kubectl port-forward service/kube-app-2-service 8081:80 -n kube-app
 # Visit: http://localhost:8081
-```
-
-### 4. Clean Up
-
-```bash
-# Clean up both applications
-./k8s-shared/cleanup-all.sh
 ```
 
 ## Individual Application Management
@@ -110,24 +133,14 @@ cd app/kube-app-2
 ### Check All Resources
 
 ```bash
-# View all pods across namespaces
-kubectl get pods --all-namespaces
+# View all pods in kube-app namespace
+kubectl get pods -n kube-app
 
-# View all services across namespaces
-kubectl get services --all-namespaces
+# View all services in kube-app namespace
+kubectl get services -n kube-app
 
-# View all ingress across namespaces
-kubectl get ingress --all-namespaces
-```
-
-### Check Specific Application
-
-```bash
-# Check kube-app resources
-kubectl get all -n kube-app
-
-# Check kube-app-2 resources
-kubectl get all -n kube-app-2
+# View ingress
+kubectl get ingress -n kube-app
 ```
 
 ### View Logs
@@ -137,44 +150,76 @@ kubectl get all -n kube-app-2
 kubectl logs -l app=kube-app -n kube-app
 
 # View logs for kube-app-2
-kubectl logs -l app=kube-app-2 -n kube-app-2
+kubectl logs -l app=kube-app-2 -n kube-app
 ```
 
-## Using Ingress (Optional)
-
-If you want to use ingress instead of port-forwarding:
-
-### 1. Enable NGINX Ingress Controller
+### Scale Applications
 
 ```bash
-minikube addons enable ingress
+# Scale kube-app
+kubectl scale deployment kube-app --replicas=5 -n kube-app
+
+# Scale kube-app-2
+kubectl scale deployment kube-app-2 --replicas=3 -n kube-app
 ```
 
-### 2. Add Host Entries
+## 🛑 Stopping and Cleaning Up Everything
 
-Add these lines to your `/etc/hosts` file:
-```
-127.0.0.1 kube-app.local
-127.0.0.1 kube-app-2.local
-```
+To fully stop and clean up your local Kubernetes environment:
 
-### 3. Access via Ingress
+### 1. Clean Up Kubernetes Resources
+
+Remove all deployed applications and ingress:
 
 ```bash
-# Get the ingress IP
-kubectl get ingress --all-namespaces
+./k8s-shared/cleanup-all.sh
+```
 
-# Access applications
-curl http://kube-app.local
-curl http://kube-app-2.local
+Or, to clean up a single app:
+
+```bash
+cd app/kube-app
+./cleanup.sh
+# or for kube-app-2
+cd app/kube-app-2
+./cleanup.sh
+```
+
+### 2. Stop the Ingress Tunnel (if running)
+
+If you started `minikube tunnel` in a terminal, stop it by closing the terminal or running:
+
+```bash
+pkill -f "minikube tunnel"
+```
+
+### 3. Stop Minikube
+
+This will stop the local Kubernetes cluster:
+
+```bash
+minikube stop
+```
+
+### 4. (Optional) Delete the Minikube Cluster
+
+If you want to remove the cluster entirely:
+
+```bash
+minikube delete
 ```
 
 ## Architecture Benefits
 
-### Namespace Isolation
-- Each application runs in its own namespace
-- No resource naming conflicts
-- Easy to manage and monitor separately
+### Shared Namespace
+- Both applications run in the same namespace for easier management
+- Shared ingress configuration
+- Simplified networking and service discovery
+
+### Path-Based Routing
+- Single domain with different paths
+- No need for multiple hostnames
+- Easier SSL/TLS configuration
 
 ### Independent Scaling
 - Scale applications independently
@@ -192,7 +237,7 @@ curl http://kube-app-2.local
 
 1. **Image Pull Errors**: Make sure to run `eval $(minikube docker-env)` before building images
 2. **Port Conflicts**: Use different ports for port-forwarding (8080, 8081)
-3. **Namespace Issues**: Ensure you're targeting the correct namespace
+3. **Ingress Not Working**: Ensure NGINX Ingress Controller is enabled and tunnel is running
 4. **Resource Limits**: Check if your cluster has enough resources
 
 ### Debug Commands
@@ -202,13 +247,13 @@ curl http://kube-app-2.local
 minikube status
 
 # Check events
-kubectl get events --all-namespaces --sort-by='.lastTimestamp'
+kubectl get events -n kube-app --sort-by='.lastTimestamp'
+
+# Check ingress controller
+kubectl get pods -n ingress-nginx
 
 # Check node resources
 kubectl describe nodes
-
-# Check pod details
-kubectl describe pod <pod-name> -n <namespace>
 ```
 
 ## Next Steps
@@ -217,4 +262,5 @@ kubectl describe pod <pod-name> -n <namespace>
 - Implement shared services (databases, message queues)
 - Add monitoring and logging infrastructure
 - Set up CI/CD pipelines for automated deployment
-- Implement security policies and network policies 
+- Implement security policies and network policies
+- Configure SSL/TLS certificates for production 
